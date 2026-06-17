@@ -67,41 +67,33 @@ class TrajectoryPlanner:
         return trajectory
 
     def _cubic_interpolation(self, start, end, duration, num_points):
-            """
-            三次样条插值
-            边界条件: 起点和终点速度为零
-            """
+        """
+        三次样条插值
+        边界条件: 起点和终点速度为零
+        """
+        times = np.linspace(0, duration, num_points)
+        key_times = [0, duration]
 
-            #为每个关节创建样条
-            trajectory = []
+        # 每个关节只构建一次样条，共 num_joints 次
+        splines = [
+            CubicSpline(key_times, [start[i], end[i]], bc_type='clamped')
+            for i in range(len(start))
+        ]
 
-            #使用 scipy 的 CubicSpline，设置零速度边界条件
-            times = np.linspace(0, duration, num_points)
+        # 一次性对所有时间点向量化求值，避免逐点调用
+        positions     = np.column_stack([cs(times)    for cs in splines])
+        velocities    = np.column_stack([cs(times, 1) for cs in splines])
+        accelerations = np.column_stack([cs(times, 2) for cs in splines])
 
-            #关键时间点（起点和终点）
-            key_times = [0, duration]
-
-            
-            for t in times:
-                position = np.zeros(len(start))
-                velocity = np.zeros(len(start))
-                acceleration = np.zeros(len(start))
-                
-                for i in range(len(start)):
-                    key_positions = [start[i], end[i]]
-                    # 使用 scipy 的 CubicSpline，设置零速度边界条件
-                    cs = CubicSpline(key_times, key_positions, bc_type='clamped') #零速度边界条件
-                    position[i] = cs(t)
-                    velocity[i] = cs(t, 1)      # 一阶导数
-                    acceleration[i] = cs(t, 2)  # 二阶导数
-                    
-                trajectory.append({
-                    'time': t,
-                    'position': position,
-                    'velocity': velocity,
-                    'acceleration': acceleration
-                })
-            return trajectory
+        return [
+            {
+                'time': t,
+                'position':     positions[i],
+                'velocity':     velocities[i],
+                'acceleration': accelerations[i],
+            }
+            for i, t in enumerate(times)
+        ]
 
     def _quintic_interpolation(self, start, end, duration, num_points):
         """五次多项式插值

@@ -61,7 +61,7 @@ class RobotSystem:
         # 2. 进阶控制 (MPC, ILC, 模仿学习, 强化学习)
         if ADVANCED_CTRL_AVAILABLE:
             self.controllers['mpc'] = MPCController(self.arm, horizon=10, dt=0.01)
-            self.controllers['ilc'] = ILCController(self.arm, learning_rate=0.3)
+            self.controllers['ilc'] = ILCController(self.arm, dt=0.01)
 
             # 模仿学习加载
             state_dim_bc = self.arm.num_joints * 4
@@ -115,10 +115,10 @@ class RobotSystem:
                 state = np.concatenate([current_q, current_dq, q_desired, dq_desired])
                 tau = controller.predict(state)
                 
-            # 动力学步进
+            # 动力学步进（半隐式欧拉：先更新速度，再用新速度更新位置）
             ddq_actual = self.arm.forward_dynamics(current_q, current_dq, tau)
             next_dq = current_dq + ddq_actual * dt
-            next_q = current_q + current_dq * dt
+            next_q  = current_q  + next_dq * dt
             
             results.append({
                 'time': point.get('time', 0.0),
@@ -136,14 +136,15 @@ class RobotSystem:
         if self.mode != 'dynamics': raise ValueError("需要动力学模式")
         controller = self.controllers['ilc']
         dt = trajectory[1]['time'] - trajectory[0]['time'] if len(trajectory) > 1 else 0.01
-        q_ref = np.array([pt['position'] for pt in trajectory])
-        
+        q_ref     = np.array([pt['position'] for pt in trajectory])
+        q_dot_ref = np.array([pt.get('velocity', np.zeros(self.arm.num_joints)) for pt in trajectory])
+
         print(f"\n🚀 开始 ILC 迭代学习，共 {iterations} 个回合...")
         for iteration in range(iterations):
             current_q = np.array(trajectory[0]['position'])
             current_dq = np.zeros(self.arm.num_joints)
             q_traj, dq_traj = [current_q.copy()], [current_dq.copy()]
-            
+
             u_seq = controller.u_prev if controller.u_prev is not None else np.zeros((len(trajectory), self.arm.num_joints))
             for i in range(len(trajectory) - 1):
                 tau = u_seq[i]
@@ -151,8 +152,8 @@ class RobotSystem:
                 current_dq, current_q = current_dq + ddq_actual * dt, current_q + current_dq * dt
                 q_traj.append(current_q.copy())
                 dq_traj.append(current_dq.copy())
-                
-            controller.update(np.array(q_traj), np.array(dq_traj), q_ref)
+
+            controller.update(np.array(q_traj), np.array(dq_traj), q_ref, q_dot_ref)
             print(f"   - 第 {iteration+1:02d} 回合 | 误差: {controller.get_convergence_metric():.6f} rad")
         return [{'time': pt.get('time', 0.0), 'position': q_traj[i]} for i, pt in enumerate(trajectory)]
 

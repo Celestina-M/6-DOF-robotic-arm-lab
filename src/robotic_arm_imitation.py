@@ -183,7 +183,7 @@ def collect_expert_demonstrations(arm, num_trajectories=10):
             q_ddot_d = -amp * (2 * np.pi * freq)**2 * np.sin(2 * np.pi * freq * ti) * np.ones(6)
 
             # 专家控制
-            u = expert.compute(q_d, q_dot_d, q_ddot_d, q, q_dot)
+            u = expert.compute_control(q_d, q_dot_d, q_ddot_d, q, q_dot)
 
             # 记录状态和动作
             state = np.concatenate([q, q_dot, q_d, q_dot_d])
