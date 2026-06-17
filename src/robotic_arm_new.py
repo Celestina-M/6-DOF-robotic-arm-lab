@@ -98,29 +98,7 @@ class RoboticArm:
             
         return transforms
 
-    def angular_velocity_jacobian(self, q, link_idx):
-        """
-        计算指定连杆的角速度雅可比矩阵 (3 x num_joints)
-        q: 当前关节角度列表
-        link_idx: 需要计算雅可比的连杆索引 (0-based)
-        返回: 雅可比矩阵 J (3 x num_joints)
-        """
-        J = np.zeros((3, self.num_joints))
-        
-        # 调用上面的函数，拿到所有关节的 4x4 变换矩阵
-        transforms = self.get_all_joint_transforms(q)
-        
-        for i in range(self.num_joints):
-            # 只有在当前连杆之前的关节，才会影响它的旋转
-            if i <= link_idx:
-                T_i = transforms[i]
-                # 旋转矩阵的第3列 (索引为2) 就是 Z轴向量
-                z_axis = T_i[0:3, 2] 
-                J[:, i] = z_axis
-                
-        return J
-
-    # 逆运动学相关方法  
+    # 逆运动学相关方法
     # 1: 实现数值微分计算雅可比矩阵
 
     def jacobian(self, joint_angles=None, epsilon=1e-6):
@@ -245,6 +223,9 @@ class RoboticArm:
         使用 scipy.optimize 的数值优化求解 IK
         """
         from scipy.optimize import minimize
+
+        saved_angles = self.joint_angles.copy()
+
         def objective(angles):
             """目标函数：位置误差的平方和"""
             self.set_joint_angles(angles)
@@ -267,7 +248,8 @@ class RoboticArm:
             self.set_joint_angles(result.x)
             return True, result.x
         else:
-            return False, result.x  
+            self.set_joint_angles(saved_angles)  # 优化失败时恢复原始状态
+            return False, result.x
 # 测试代码 
 if __name__ == "__main__":
     arm = RoboticArm(num_joints=6)

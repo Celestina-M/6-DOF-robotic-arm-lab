@@ -149,7 +149,8 @@ class RobotSystem:
             for i in range(len(trajectory) - 1):
                 tau = u_seq[i]
                 ddq_actual = self.arm.forward_dynamics(current_q, current_dq, tau)
-                current_dq, current_q = current_dq + ddq_actual * dt, current_q + current_dq * dt
+                current_dq = current_dq + ddq_actual * dt
+                current_q  = current_q  + current_dq * dt
                 q_traj.append(current_q.copy())
                 dq_traj.append(current_dq.copy())
 
