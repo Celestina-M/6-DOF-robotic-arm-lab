@@ -5,7 +5,7 @@ from numba import njit
 # 核心计算函数 (保持在类外进行 Numba 加速) 
 @njit
 def fast_fk_computation(joint_angles, dh_params):
-    """齐次变换矩阵连乘逻辑 (修正了 Numba 类型断言错误)"""
+    """齐次变换矩阵连乘逻辑"""
     T = np.eye(4, dtype=np.float64)
     # 强制确保 T 是 float64 类型
     for i in range(len(joint_angles)):
@@ -175,9 +175,16 @@ class RoboticArm:
         原理：在当前关节角附近，末端位置变化 ≈ J · Δθ。
         我们想让末端朝目标移动 error，于是反解 Δθ，迭代逼近。
         用 DLS 而非纯伪逆，是为了在奇异点附近保持数值稳定、避免 Δθ 爆炸。
+
+        状态保护：迭代过程中会反复调用 self.set_joint_angles 改写 arm 的内部
+        joint_angles。若求解失败却不恢复，arm 的内部状态会停留在失败时的角度，
+        污染后续的 get_end_effector_position()、以及不传 initial_guess 时的下一次
+        IK（它会以当前角度为初始猜测）。因此：求解前存档，仅在成功时保留新状态，
+        失败时回滚到求解前的角度。
         """
         damping = 0.05          # 阻尼系数 λ：越大越稳但收敛越慢，越小越快但奇异点附近易发散
         theta = theta.copy()    # 拷贝一份，避免污染外部传入的初始猜测
+        saved_angles = self.joint_angles.copy()   # 存档：求解前的 arm 状态
 
         for _ in range(max_iter):
             # 1. 用当前角度算出末端实际位置
@@ -187,7 +194,7 @@ class RoboticArm:
             # 2. 计算位置误差（目标 - 当前），即末端还需移动的向量
             error = target_pos - current_pos
 
-            # 3. 误差足够小则认为收敛，返回成功
+            # 3. 误差足够小则认为收敛，返回成功（保留收敛后的 arm 状态）
             if np.linalg.norm(error) < tol:
                 return True, theta
 
@@ -214,7 +221,9 @@ class RoboticArm:
             for i, (min_angle, max_angle) in enumerate(self.joint_limits):
                 theta[i] = np.clip(theta[i], min_angle, max_angle)
 
-        # 超过最大迭代次数仍未收敛，返回失败（theta 为当前最接近的解）
+        # 超过最大迭代次数仍未收敛：回滚 arm 内部状态，返回失败
+        # （theta 仍作为"当前最接近的解"返回，供调用者参考，但不污染 arm 状态）
+        self.set_joint_angles(saved_angles)
         return False, theta
     
 # 任务 4: 基于优化的 IK 求解
@@ -272,15 +281,18 @@ if __name__ == "__main__":
     print(f"优化后性能: {num_tests / elapsed:.0f} ops/sec")
 
     # 4. 逆运动学简单验证
+    #    显式从零位出发，避免被前面测速循环或其它调用留下的状态影响
     print("\n逆运动学测试:")
-    target = [0.4, 0.1, 0.4]
-    success, sol = arm.inverse_kinematics(target)
+    target = [0.3, 0.1, 0.4]
+    success, sol = arm.inverse_kinematics(target, initial_guess=np.zeros(6))
     print(f"求解状态: {success}, 目标: {target}, 结果位置: {arm.get_end_effector_position().round(4)}")
 
     # ===== 工作空间自检 =====
+    #    每个点都显式从零位出发求解，保证各点相互独立、不串联污染
     print("\n===== 工作空间自检 =====")
+    arm.set_joint_angles(np.zeros(6))
     print("零位:", arm.get_end_effector_position().round(4))
     for z in [0.1, 0.2, 0.3, 0.4]:
-        ok, sol = arm.inverse_kinematics([0.3, 0.0, z])
+        ok, sol = arm.inverse_kinematics([0.3, 0.0, z], initial_guess=np.zeros(6))
         arm.set_joint_angles(sol)
         print(f"z={z}: success={ok}, 实际={arm.get_end_effector_position().round(4)}")

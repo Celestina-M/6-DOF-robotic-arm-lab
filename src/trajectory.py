@@ -1,3 +1,5 @@
+import matplotlib
+matplotlib.use('TkAgg')
 import numpy as np
 from scipy.interpolate import CubicSpline
 from robotic_arm_new import RoboticArm
@@ -293,42 +295,48 @@ class TrajectoryPlanner:
 
 
     def plan_smooth_multisegment(self, cartesian_waypoints, total_duration, num_points=100):
-            """多段轨迹平滑连接 (用于绘制五角星等)"""
-            joint_waypoints = []
-            valid_waypoints = []
-            last_angles = None
-            
-            for pos in cartesian_waypoints:
-                success, angles = self.robotic_arm.inverse_kinematics(pos, initial_guess=last_angles, max_iterations=300)
-                if success:
-                    last_angles = angles
-                    joint_waypoints.append(angles)
-                    valid_waypoints.append(pos)
-                else:
-                    print(f"警告：路径点 {pos} IK求解失败，已跳过该点。")
+        """多段轨迹平滑连接 (用于绘制五角星等)"""
+        joint_waypoints = []
+        valid_waypoints = []
+        last_angles = None
 
-            if len(joint_waypoints) < 2:
-                raise ValueError("有效的路径点不足，无法规划轨迹")
+        for idx, pos in enumerate(cartesian_waypoints):
+            # 第一个点显式从零位出发，避免被上一段轨迹（如螺旋线）的残留姿态污染
+            guess = last_angles if last_angles is not None else np.zeros(6)
+            success, angles = self.robotic_arm.inverse_kinematics(
+                pos, initial_guess=guess, max_iterations=300
+            )
+            # 同时要求成功 且 解里没有 NaN/inf，否则后面喂给 CubicSpline 会触发底层 SystemError
+            if success and np.all(np.isfinite(angles)):
+                last_angles = angles
+                joint_waypoints.append(angles)
+                valid_waypoints.append(pos)
+            else:
+                print(f"警告：第 {idx} 个路径点 {np.round(pos, 4)} IK求解失败/含NaN，已跳过。success={success}")
 
-            joint_waypoints = np.array(joint_waypoints)
-            num_waypoints = len(joint_waypoints)
-            
-            waypoint_times = np.linspace(0, total_duration, num_waypoints)
-            cs = CubicSpline(waypoint_times, joint_waypoints, axis=0, bc_type='clamped')
-            
-            trajectory = []
-            times = np.linspace(0, total_duration, num_points)
-            
-            for t in times:
-                trajectory.append({
-                    'time': t,
-                    'position': cs(t),
-                    'velocity': cs(t, 1),
-                    'acceleration': cs(t, 2)
-                })
-                
-            return trajectory
+        print(f"有效路径点数: {len(joint_waypoints)} / {len(cartesian_waypoints)}")
 
+        if len(joint_waypoints) < 2:
+            raise ValueError("有效的路径点不足，无法规划轨迹")
+
+        joint_waypoints = np.array(joint_waypoints)
+        num_waypoints = len(joint_waypoints)
+
+        waypoint_times = np.linspace(0, total_duration, num_waypoints)
+        cs = CubicSpline(waypoint_times, joint_waypoints, axis=0, bc_type='clamped')
+
+        trajectory = []
+        times = np.linspace(0, total_duration, num_points)
+
+        for t in times:
+            trajectory.append({
+                'time': t,
+                'position': cs(t),
+                'velocity': cs(t, 1),
+                'acceleration': cs(t, 2)
+            })
+
+        return trajectory
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
@@ -336,7 +344,7 @@ from mpl_toolkits.mplot3d import Axes3D
 
 # 3D 轨迹可视化测试
 
-def test_weekends():
+def test_3d_trajectories():
     # 1. 实例化机械臂代码
     arm = RoboticArm(num_joints=6)
     
@@ -347,7 +355,7 @@ def test_weekends():
 
     # 绘制 3D 螺旋线 
     ax1 = fig.add_subplot(121, projection='3d')
-    ax1.set_title("Weekends: 3D Spiral Track", fontsize=14)
+    ax1.set_title("3D Spiral Track", fontsize=14)
 
     print("正在规划 3D 螺旋线 (可能需要几秒钟解算 IK)...")
     spiral_traj = planner.plan_cartesian_spiral(
@@ -371,7 +379,7 @@ def test_weekends():
 
     # 绘制五角星 (平滑连接)
     ax2 = fig.add_subplot(122, projection='3d')
-    ax2.set_title("Weekends: Smooth Star Track", fontsize=14)
+    ax2.set_title("Smooth Star Track", fontsize=14)
 
     print("正在规划五角星平滑轨迹...")
     star_center = [0.4, 0.0, 0.3] # 稍微调远一点，保证在 UR5 机械臂的舒适工作空间内
@@ -406,7 +414,7 @@ def test_weekends():
     plt.show()
 
 
-# 要求1：效率对比与曲线绘制测试脚本
+# 1：效率对比与曲线绘制测试脚本
 
 def run_basic_assignment():
     # 1. 实例化机械臂和规划器
@@ -421,7 +429,7 @@ def run_basic_assignment():
     methods = ['linear', 'cubic', 'quintic']
     
     
-    # 要求 2: 对比计算效率 (测量运行时间)
+    # 2: 对比计算效率 (测量运行时间)
     
     print("\n" + "="*40)
     print("要求 2: 计算效率对比")
@@ -443,10 +451,10 @@ def run_basic_assignment():
         trajectories[method] = traj
 
     
-    # 要求 3: 绘制位置-速度-加速度曲线 (以关节0为例)
+    # 3: 绘制位置-速度-加速度曲线 (以关节0为例)
     
     import matplotlib.pyplot as plt
-    print("\n正在生成作业要求 3 的曲线图，请查看弹出的窗口...")
+    print("\n正在生成 3 的曲线图，请查看弹出的窗口...")
     
     # 提取关节0的数据的辅助函数
     def extract_joint_data(trajectory, joint_idx=0):
@@ -493,4 +501,4 @@ if __name__ == "__main__":
     
     run_basic_assignment()
     
-    test_weekends()
+    test_3d_trajectories()
