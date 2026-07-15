@@ -2,20 +2,6 @@
 """
 优化控制模块（MPC + ILC）
 
-ILC 重写要点（针对原版"越学越发散"的根因）：
-1. 删除重复的 ILCController 定义（原文件里有两个同名类，后者覆盖前者，
-   且签名与 robotic_system.py 的调用不兼容）。现在只保留一个。
-2. 前馈初始化：第一轮控制量用逆动力学基于"参考轨迹"算出，
-   u_0[t] = inverse_dynamics(q_ref[t], q_dot_ref[t], q_ddot_ref[t])，
-   而非只给重力。这样第一轮误差就很小，后续学习是在好起点上微调。
-3. 学习律时序对齐（发散主因）：力矩 u[t] 影响的是 t 之后的状态，
-   因此用"下一时刻误差" e[t+1] 来修正 u[t]，而不是同时刻 e[t]。
-   采用 PD 型：u_{k+1}[t] = u_k[t] + Kp * e[t+1] + Kd * edot[t+1]。
-4. 接口兼容 robotic_system.py：
-   - 构造：ILCController(arm, learning_rate=0.3) 必须可用。
-   - update(q_traj, q_dot_traj, q_ref_traj, q_dot_ref_traj=None)：
-     第四个参数可选，不传时用 np.gradient 从 q_ref 数值微分得到参考速度，
-     这样 robotic_system.py 的三参数调用 update(q_traj, dq_traj, q_ref) 也能跑。
 """
 import numpy as np
 from scipy.optimize import minimize
