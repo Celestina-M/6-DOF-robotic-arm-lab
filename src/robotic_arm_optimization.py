@@ -1,6 +1,6 @@
 # 文件：src/robotic_arm_optimization.py
 """
-优化控制模块（MPC + ILC，ILC 为重写版）
+优化控制模块（MPC + ILC）
 
 ILC 重写要点（针对原版"越学越发散"的根因）：
 1. 删除重复的 ILCController 定义（原文件里有两个同名类，后者覆盖前者，
@@ -25,7 +25,7 @@ from robotic_arm_dynamics import RoboticArmDynamics
 
 
 # ============================================================
-# MPC 控制器（保持不变，仅随文件一起保留）
+# MPC 控制器
 # ============================================================
 class MPCController:
     def __init__(self, arm_dynamics, horizon=10, dt=0.1):
@@ -90,7 +90,7 @@ def test_mpc():
 
 
 # ============================================================
-# ILC 控制器（重写版，唯一定义）
+# ILC 控制器
 # ============================================================
 class ILCController:
     def __init__(self, arm_dynamics, learning_rate=0.3, dt=0.01,
@@ -225,7 +225,7 @@ class ILCController:
 
 
 def test_ilc():
-    """测试 ILC 学习（重写版）"""
+    """测试 ILC 学习"""
     arm = RoboticArmDynamics(num_joints=6)
     dt = 0.01
     # learning_rate 调到 0.2（更稳），Q-filter cutoff 3Hz（长轨迹滤得更狠）
@@ -260,7 +260,7 @@ def test_ilc():
 
     num_iterations = 20
     errors = []
-    print("开始 ILC 学习（重写版，前馈学习 + PD 反馈）...")
+    print("开始 ILC 学习（前馈学习 + PD 反馈）...")
 
     q_trajectory = None
     for iteration in range(num_iterations):
