@@ -153,7 +153,7 @@ python src/exp4_robust_sweep.py plot      # 生成 docs/exp4_robust_sweep.png
 | `exp2_all_controllers.png` | 全控制器含噪对比（PID/CTC/RCTC/SMC/ILC/BC/MPC） |
 | `exp2_ppo.png` / `ppo_train_log.csv` | PPO 训练曲线与评估 |
 | `exp3_distortion_decomposition.png` | 跟踪误差按来源分解 |
-| `exp4_robust_sweep.png` | **鲁棒性主图**：失配等级 vs 追踪 RMSE（CTC/RCTC/SMC） |
+| `exp4_robust_sweep.png` | 鲁棒性主图：失配等级 vs 追踪 RMSE（CTC/RCTC/SMC） |
 
 ## 性能指标
 
