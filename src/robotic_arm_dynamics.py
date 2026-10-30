@@ -390,58 +390,104 @@ class RoboticArmDynamics(RoboticArm):
 class JointKalmanFilter:
     """
     单关节卡尔曼滤波器
-    状态: x = [位置, 速度]
     观测: z = [位置]（速度由滤波器估计出来）
-    
+
     用途：传感器只能测位置，速度是估计出的，比直接数值微分更平滑、抗噪
+
+    model:
+        'cv' —— 匀速模型，状态 x = [位置, 速度]
+        'ca' —— 匀加速模型，状态 x = [位置, 速度, 加速度]
+                追踪加速度非零的轨迹（如五次多项式）时滞后更小，
+                代价是噪声略大、计算量略高
     """
-    def __init__(self, dt=0.01, process_noise=0.01, measurement_noise=0.05):
+    def __init__(self, dt=0.01, process_noise=0.01, measurement_noise=0.05,
+                 model='cv'):
         self.dt = dt
-        
-        # 状态转移矩阵 F (匀加速模型简化为匀速)
-        # x_new = F @ x_old
-        # [pos_new]   [1, dt] [pos_old]
-        # [vel_new] = [0, 1 ] [vel_old]
-        self.F = np.array([[1.0, dt ],
-                           [0.0, 1.0]])
-        
-        # 观测矩阵 H：只能测到位置
-        self.H = np.array([[1.0, 0.0]])
-        
-        # 过程噪声协方差 Q：模型不准确度
-        # 越大 → 越相信观测；越小 → 越相信模型预测
-        q = process_noise
-        self.Q = q * np.array([[dt**4/4, dt**3/2],
-                               [dt**3/2, dt**2  ]])
-        
+        self.model = model
+
+        if model == 'cv':
+            # 状态转移矩阵 F (匀速模型)
+            self.F = np.array([[1.0, dt ],
+                               [0.0, 1.0]])
+            # 观测矩阵 H：只能测到位置
+            self.H = np.array([[1.0, 0.0]])
+            # 过程噪声协方差 Q（连续白噪声加速度模型离散化）
+            q = process_noise
+            self.Q = q * np.array([[dt**4/4, dt**3/2],
+                                   [dt**3/2, dt**2  ]])
+            self._dim = 2
+        elif model == 'ca':
+            # 匀加速模型
+            self.F = np.array([[1.0, dt,  dt**2/2],
+                               [0.0, 1.0, dt     ],
+                               [0.0, 0.0, 1.0    ]])
+            self.H = np.array([[1.0, 0.0, 0.0]])
+            # 连续白噪声加加速度 (jerk) 模型离散化
+            q = process_noise
+            self.Q = q * np.array([[dt**5/20, dt**4/8, dt**3/6],
+                                   [dt**4/8,  dt**3/3, dt**2/2],
+                                   [dt**3/6,  dt**2/2, dt     ]])
+            self._dim = 3
+        else:
+            raise ValueError("model 必须是 'cv' 或 'ca'")
+
         # 观测噪声协方差 R：传感器噪声水平
         self.R = np.array([[measurement_noise**2]])
-        
-        # 初始状态和协方差
-        self.x = np.zeros(2)         # [位置, 速度]
-        self.P = np.eye(2) * 1.0     # 初始不确定性
+        self._mn = measurement_noise
 
-    def update(self, q_measured):
-        """输入一次位置观测，返回 (滤波后的位置, 估计的速度)"""
+        # 已知控制输入（加速度）的输入矩阵 B：x_pred = F x + B * a
+        # 仅 CV 模型支持"输入感知"：把控制器上一步施加力矩对应的模型预测
+        # 加速度作为已知输入注入预测步。无输入滤波器把控制效果当作未知扰动，
+        # 估计误差会被控制量持续驱动，闭环下有失稳风险（分离原理不成立，
+        # 因为观测器不知道控制输入）。
+        self.B = np.array([[dt**2 / 2], [dt]])
+
+        # 初始状态和协方差
+        self.x = np.zeros(self._dim)
+        self.P = np.eye(self._dim) * 1.0     # 初始不确定性
+
+    def update(self, q_measured, u_acc=None):
+        """
+        输入一次位置观测，返回 (滤波后的位置, 估计的速度)
+
+        参数:
+            q_measured: 位置观测值
+            u_acc: 上一步控制输入对应的模型预测加速度（输入感知模式），
+                   None 时退化为普通无输入滤波器
+        """
         # === 预测步 ===
         x_pred = self.F @ self.x
+        if u_acc is not None:
+            if self._dim != 2:
+                raise ValueError("输入感知(u_acc)仅支持 CV 模型")
+            x_pred = x_pred + (self.B @ np.atleast_1d(u_acc)).ravel()
         P_pred = self.F @ self.P @ self.F.T + self.Q
-        
+
         # === 更新步 ===
         z = np.array([q_measured])
         y = z - self.H @ x_pred                              # 残差
         S = self.H @ P_pred @ self.H.T + self.R              # 残差协方差
         K = P_pred @ self.H.T @ np.linalg.inv(S)             # 卡尔曼增益
-        
+
         self.x = x_pred + (K @ y).flatten()
-        self.P = (np.eye(2) - K @ self.H) @ P_pred
-        
+        self.P = (np.eye(self._dim) - K @ self.H) @ P_pred
+
         return self.x[0], self.x[1]   # 滤波后的位置和速度
 
     def reset(self, q_init=0.0):
-        """重置滤波器"""
-        self.x = np.array([q_init, 0.0])
-        self.P = np.eye(2) * 1.0
+        """
+        重置滤波器。
+
+        初始协方差取"位置已知（= 测量噪声水平）、速度/加速度较不确定"，
+        而非旧版的 P = I：初始位置确实已知（复位时给定 q_init），
+        P 过大的前几步会产生 ~50 倍的速度增益，速度估计被测量噪声猛推，
+        闭环下会激发控制器与估计器互相追逐直至发散。
+        """
+        self.x = np.zeros(self._dim)
+        self.x[0] = q_init
+        P0 = np.eye(self._dim) * 0.01      # 速度/加速度初始不确定度 0.1
+        P0[0, 0] = max(self._mn**2, 1e-8)  # 位置初始不确定度 = 观测噪声
+        self.P = P0
 
 class PIDController:
     def __init__(self, Kp, Ki, Kd, num_joints=6, integral_limit=30.0, error_threshold=0.1, dt=0.01,

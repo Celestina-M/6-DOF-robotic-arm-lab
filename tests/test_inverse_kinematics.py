@@ -3,7 +3,13 @@
 """
 
 import numpy as np
-from src.robotic_arm_new import RoboticArm 
+import sys
+import os
+
+# 与其他测试统一：把仓库根目录加入 sys.path 后以 src 包方式导入
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from src.robotic_arm_new import RoboticArm
 
 def test_ik_success_rate():
     """

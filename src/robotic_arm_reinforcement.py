@@ -89,6 +89,21 @@ class PPOAgent:
         self.values = []
         self.dones = []
 
+    def save(self, path):
+        """保存策略网络与优化器状态（支持断点续训）"""
+        import torch
+        torch.save({
+            'policy': self.policy.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+        }, path)
+
+    def load(self, path):
+        """加载策略网络与优化器状态"""
+        import torch
+        ckpt = torch.load(path, map_location='cpu', weights_only=True)
+        self.policy.load_state_dict(ckpt['policy'])
+        self.optimizer.load_state_dict(ckpt['optimizer'])
+
     def select_action(self, state):
         """选择动作"""
         state_tensor = torch.FloatTensor(state).unsqueeze(0)
@@ -172,14 +187,22 @@ class PPOAgent:
 
 # 环境包装器
 class RobotArmEnv:
-    def __init__(self, arm):
+    def __init__(self, arm, use_gravity_comp=False, shaped_reward=False):
         """
         机械臂环境
 
         参数:
             arm: RoboticArmDynamics实例
+            use_gravity_comp: 动作叠加重力补偿项（tau = π(a) + G(q)）。
+                端到端力矩 RL 的探索-重力失配修复：初始探索噪声 std≈1 N·m，
+                而重力力矩达 10~30 N·m，策略永远无法发现"抬起手臂"的动作，
+                训练完全不收敛（实测 100 回合末端距离始终 ~0.9 m）。
+            shaped_reward: 奖励整形（距离差分 + 到达奖励），
+                替代稀疏的 -distance 累积奖励。
         """
         self.arm = arm
+        self.use_gravity_comp = use_gravity_comp
+        self.shaped_reward = shaped_reward
         self.state_dim = 12  # q (6) + q_dot (6)
         self.action_dim = 6  # 关节力矩
 
@@ -194,22 +217,28 @@ class RobotArmEnv:
         # 状态
         self.q = np.zeros(6)
         self.q_dot = np.zeros(6)
+        self._prev_dist = None
 
     def reset(self):
         """重置环境"""
         self.q = np.random.uniform(-0.5, 0.5, 6)
         self.q_dot = np.zeros(6)
         self.current_step = 0
+        self.arm.set_joint_angles(self.q)
+        self._prev_dist = np.linalg.norm(
+            self.arm.get_end_effector_position() - self.target)
 
         return self._get_state()
 
     def step(self, action):
         """执行一步"""
-        # 应用动作 (力矩)
-        action = np.clip(action, -50, 50)
+        # 应用动作 (力矩)，可选叠加重力补偿
+        tau = np.clip(action, -50, 50)
+        if self.use_gravity_comp:
+            tau = tau + self.arm.gravity_vector(self.q)
 
         # 动力学仿真
-        q_ddot = self.arm.forward_dynamics(self.q, self.q_dot, action)
+        q_ddot = self.arm.forward_dynamics(self.q, self.q_dot, tau)
         self.q_dot = self.q_dot + q_ddot * self.dt
         self.q = self.q + self.q_dot * self.dt
 
@@ -218,7 +247,14 @@ class RobotArmEnv:
         current_pos = self.arm.get_end_effector_position()
         distance = np.linalg.norm(current_pos - self.target)
 
-        reward = -distance  # 距离越小，奖励越大
+        if self.shaped_reward:
+            # 距离差分（每步最多 ±几厘米，量纲友好）+ 到达奖励
+            reward = (self._prev_dist - distance) * 10.0
+            if distance < 0.05:
+                reward += 10.0
+        else:
+            reward = -distance  # 距离越小，奖励越大
+        self._prev_dist = distance
 
         # 检查终止条件
         self.current_step += 1

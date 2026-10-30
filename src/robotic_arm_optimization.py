@@ -14,7 +14,8 @@ from robotic_arm_dynamics import RoboticArmDynamics
 # MPC 控制器
 # ============================================================
 class MPCController:
-    def __init__(self, arm_dynamics, horizon=10, dt=0.1):
+    def __init__(self, arm_dynamics, horizon=10, dt=0.1, maxiter=100,
+                 warm_start=True):
         self.arm = arm_dynamics
         self.horizon = horizon
         self.dt = dt
@@ -23,9 +24,22 @@ class MPCController:
         self.R = np.diag([1, 1, 1, 1, 1, 1])
         self.u_min = -np.array([50, 50, 50, 25, 25, 25])
         self.u_max = np.array([50, 50, 50, 25, 25, 25])
+        # 热启动：相邻控制周期的最优解高度相关，
+        # 以上一周期解平移一位作为初值，可大幅减少 SLSQP 迭代
+        self.maxiter = maxiter
+        self.warm_start = warm_start
+        self._last_solution = None
+
+    def reset_warm_start(self):
+        self._last_solution = None
 
     def compute(self, q_current, q_dot_current, q_ref_trajectory):
-        u_init = np.zeros(self.horizon * self.num_joints)
+        if self.warm_start and self._last_solution is not None:
+            # 平移上一周期解，末尾补最后一个控制量
+            prev = self._last_solution.reshape(self.horizon, self.num_joints)
+            u_init = np.vstack([prev[1:], prev[-1:]]).ravel()
+        else:
+            u_init = np.zeros(self.horizon * self.num_joints)
 
         def cost_function(u_sequence):
             u_sequence = u_sequence.reshape(self.horizon, self.num_joints)
@@ -50,7 +64,9 @@ class MPCController:
                 bounds.append((self.u_min[i], self.u_max[i]))
 
         result = minimize(cost_function, u_init, method='SLSQP',
-                          bounds=bounds, options={'maxiter': 100, 'disp': False})
+                          bounds=bounds,
+                          options={'maxiter': self.maxiter, 'disp': False})
+        self._last_solution = result.x.copy()
         return result.x[:self.num_joints]
 
 
